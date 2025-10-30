@@ -1,4 +1,4 @@
-import { promptApiService, type MissingFieldInfo } from '../services/promptApiService';
+import { promptApiService } from '../services/promptApiService';
 import { billService } from '../services/billService';
 
 export default defineContentScript({
@@ -103,72 +103,30 @@ export default defineContentScript({
         // Use Prompt API to extract bill data
         let extractedData = await promptApiService.extractBillData(text);
 
-        // Validate required fields
-        const validation = promptApiService.validateRequiredFields(extractedData);
-        
-        // Prompt for missing fields
-        if (!validation.isValid) {
-          console.log('Missing required fields:', validation.missingFields);
-          
-          // Send message to open popup with missing fields form
-          const formData = await showMissingFieldsForm(validation.missingFields, extractedData);
-          
-          if (!formData) {
-            // User cancelled - hide overlay and return
-            hideLoadingOverlay();
-            return false;
-          }
-          
-          // Update the extracted data with user input from form
-          Object.keys(formData).forEach(key => {
-            if (key === 'lineAmount') {
-              extractedData.lineAmount = Number(formData[key]) || 0;
-            } else {
-              (extractedData as any)[key] = formData[key];
-            }
-          });
-          
-          // Re-validate to ensure all fields are now filled
-          const revalidation = promptApiService.validateRequiredFields(extractedData);
-          if (!revalidation.isValid) {
-            // Hide overlay before showing alert
-            hideLoadingOverlay();
-            alert('Some required fields are still missing. Please try again.');
-            return false;
-          }
-        }
-
         // Hide loading overlay after extraction
         hideLoadingOverlay();
 
-        // Show confirmation dialog
-        const confirmed = confirm(
-          `Extract this bill?\n\n` +
-          `Supplier: ${extractedData.supplier}\n` +
-          `Amount: ${extractedData.lineAmount} ${extractedData.currency || ''}\n` +
-          `Bill Date: ${extractedData.billDate}\n` +
-          `Due Date: ${extractedData.dueDate}\n\n` +
-          `Click OK to save or Cancel to edit manually.`
-        );
+        // Show confirmation modal with editable fields (allows user to fill in missing fields)
+        const confirmedData = await showBillConfirmationModal(extractedData);
 
-        if (!confirmed) {
-          // TODO: Open popup with form for manual editing
+        if (!confirmedData) {
+          // User cancelled
           return false;
         }
 
-        // Create bill
+        // Use confirmed/edited data to create bill
         const bill = await billService.createBill({
-          billNo: extractedData.billNo || 'AUTO-' + Date.now(),
-          supplier: extractedData.supplier,
-          billDate: new Date(extractedData.billDate),
-          dueDate: new Date(extractedData.dueDate),
-          account: extractedData.account || 'Expense',
-          lineDescription: extractedData.lineDescription,
-          lineAmount: extractedData.lineAmount,
-          terms: extractedData.terms,
-          location: extractedData.location,
-          memo: extractedData.memo,
-          currency: extractedData.currency,
+          billNo: confirmedData.billNo || 'AUTO-' + Date.now(),
+          supplier: confirmedData.supplier,
+          billDate: new Date(confirmedData.billDate),
+          dueDate: new Date(confirmedData.dueDate),
+          account: confirmedData.account || 'Expense',
+          lineDescription: confirmedData.lineDescription || '',
+          lineAmount: confirmedData.lineAmount,
+          terms: confirmedData.terms,
+          location: confirmedData.location,
+          memo: confirmedData.memo,
+          currency: confirmedData.currency,
         });
 
         console.log('Bill created successfully:', bill);
@@ -187,57 +145,346 @@ export default defineContentScript({
     }
 
     /**
-     * Show missing fields form in popup and wait for response
+     * Show bill confirmation modal with editable fields
      */
-    function showMissingFieldsForm(
-      missingFields: MissingFieldInfo[], 
-      extractedData: any
-    ): Promise<Record<string, string | number> | null> {
+    function showBillConfirmationModal(extractedData: any): Promise<any | null> {
       return new Promise((resolve) => {
-        // Store the extraction data for the popup to retrieve
-        chrome.storage.local.set({
-          pendingBillExtraction: {
-            missingFields,
-            extractedData,
-            timestamp: Date.now(),
+        // Create modal overlay
+        const modal = document.createElement('div');
+        modal.id = 'billing-confirmation-modal';
+        modal.innerHTML = `
+          <div style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          ">
+            <div style="
+              background: white;
+              width: 90%;
+              max-width: 600px;
+              max-height: 90vh;
+              border-radius: 8px;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+              display: flex;
+              flex-direction: column;
+              overflow: hidden;
+            ">
+              <!-- Header -->
+              <div style="
+                padding: 1.5rem;
+                border-bottom: 1px solid #e5e7eb;
+              ">
+                <h2 style="
+                  margin: 0;
+                  font-size: 1.25rem;
+                  font-weight: 600;
+                  color: #1f2937;
+                ">Review Bill Details</h2>
+                <p style="
+                  margin: 0.5rem 0 0 0;
+                  font-size: 0.875rem;
+                  color: #6b7280;
+                ">Please review and confirm the extracted bill information. You can edit any field.</p>
+              </div>
+
+              <!-- Content -->
+              <div style="
+                padding: 1.5rem;
+                overflow-y: auto;
+                flex: 1;
+              ">
+                <form id="bill-confirmation-form" style="
+                  display: grid;
+                  gap: 1rem;
+                ">
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Supplier <span style="color: #dc4c3e;">*</span></label>
+                      <input type="text" id="supplier" value="${extractedData.supplier || ''}" required style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Bill Number</label>
+                      <input type="text" id="billNo" value="${extractedData.billNo || ''}" style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Bill Date <span style="color: #dc4c3e;">*</span></label>
+                      <input type="date" id="billDate" value="${extractedData.billDate || ''}" required style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Due Date <span style="color: #dc4c3e;">*</span></label>
+                      <input type="date" id="dueDate" value="${extractedData.dueDate || ''}" required style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style="
+                      display: block;
+                      margin-bottom: 0.5rem;
+                      font-size: 0.875rem;
+                      font-weight: 500;
+                      color: #374151;
+                    ">Account <span style="color: #dc4c3e;">*</span></label>
+                    <input type="text" id="account" value="${extractedData.account || ''}" required style="
+                      width: 100%;
+                      padding: 0.625rem 0.75rem;
+                      border: 1px solid #d1d5db;
+                      border-radius: 6px;
+                      font-size: 0.9375rem;
+                      box-sizing: border-box;
+                    " />
+                  </div>
+
+                  <div>
+                    <label style="
+                      display: block;
+                      margin-bottom: 0.5rem;
+                      font-size: 0.875rem;
+                      font-weight: 500;
+                      color: #374151;
+                    ">Description</label>
+                    <input type="text" id="lineDescription" value="${extractedData.lineDescription || ''}" style="
+                      width: 100%;
+                      padding: 0.625rem 0.75rem;
+                      border: 1px solid #d1d5db;
+                      border-radius: 6px;
+                      font-size: 0.9375rem;
+                      box-sizing: border-box;
+                    " />
+                  </div>
+
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Amount <span style="color: #dc4c3e;">*</span></label>
+                      <input type="number" step="0.01" id="lineAmount" value="${extractedData.lineAmount || ''}" required style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                    <div>
+                      <label style="
+                        display: block;
+                        margin-bottom: 0.5rem;
+                        font-size: 0.875rem;
+                        font-weight: 500;
+                        color: #374151;
+                      ">Currency</label>
+                      <input type="text" id="currency" value="${extractedData.currency || 'USD'}" style="
+                        width: 100%;
+                        padding: 0.625rem 0.75rem;
+                        border: 1px solid #d1d5db;
+                        border-radius: 6px;
+                        font-size: 0.9375rem;
+                        box-sizing: border-box;
+                      " />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style="
+                      display: block;
+                      margin-bottom: 0.5rem;
+                      font-size: 0.875rem;
+                      font-weight: 500;
+                      color: #374151;
+                    ">Terms</label>
+                    <input type="text" id="terms" value="${extractedData.terms || ''}" style="
+                      width: 100%;
+                      padding: 0.625rem 0.75rem;
+                      border: 1px solid #d1d5db;
+                      border-radius: 6px;
+                      font-size: 0.9375rem;
+                      box-sizing: border-box;
+                    " />
+                  </div>
+
+                  <div>
+                    <label style="
+                      display: block;
+                      margin-bottom: 0.5rem;
+                      font-size: 0.875rem;
+                      font-weight: 500;
+                      color: #374151;
+                    ">Memo</label>
+                    <textarea id="memo" rows="3" style="
+                      width: 100%;
+                      padding: 0.625rem 0.75rem;
+                      border: 1px solid #d1d5db;
+                      border-radius: 6px;
+                      font-size: 0.9375rem;
+                      box-sizing: border-box;
+                      font-family: inherit;
+                      resize: vertical;
+                    ">${extractedData.memo || ''}</textarea>
+                  </div>
+                </form>
+              </div>
+
+              <!-- Footer -->
+              <div style="
+                padding: 1.5rem;
+                border-top: 1px solid #e5e7eb;
+                display: flex;
+                gap: 0.75rem;
+                justify-content: flex-end;
+              ">
+                <button id="cancel-btn" type="button" style="
+                  padding: 0.625rem 1.5rem;
+                  background: #ffffff;
+                  border: 1px solid #d1d5db;
+                  border-radius: 6px;
+                  color: #374151;
+                  font-size: 0.875rem;
+                  font-weight: 500;
+                  cursor: pointer;
+                  transition: all 0.2s;
+                " onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='#ffffff'">
+                  Cancel
+                </button>
+                <button id="submit-btn" type="submit" form="bill-confirmation-form" style="
+                  padding: 0.625rem 1.5rem;
+                  background: #dc4c3e;
+                  border: none;
+                  border-radius: 6px;
+                  color: white;
+                  font-size: 0.875rem;
+                  font-weight: 500;
+                  cursor: pointer;
+                  transition: all 0.2s;
+                " onmouseover="this.style.background='#c03f32'" onmouseout="this.style.background='#dc4c3e'">
+                  Save Bill
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        const form = modal.querySelector('#bill-confirmation-form') as HTMLFormElement;
+        const cancelBtn = modal.querySelector('#cancel-btn') as HTMLButtonElement;
+
+        // Handle form submission
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          
+          const supplier = (form.querySelector('#supplier') as HTMLInputElement).value;
+          const billDate = (form.querySelector('#billDate') as HTMLInputElement).value;
+          const dueDate = (form.querySelector('#dueDate') as HTMLInputElement).value;
+          const account = (form.querySelector('#account') as HTMLInputElement).value;
+          const lineAmount = parseFloat((form.querySelector('#lineAmount') as HTMLInputElement).value);
+
+          // Validate required fields
+          if (!supplier || !billDate || !dueDate || !account || !lineAmount || lineAmount <= 0) {
+            alert('Please fill in all required fields (Supplier, Bill Date, Due Date, Account, and Amount greater than 0).');
+            return;
           }
+
+          const formData = {
+            billNo: (form.querySelector('#billNo') as HTMLInputElement).value,
+            supplier,
+            billDate,
+            dueDate,
+            account,
+            lineDescription: (form.querySelector('#lineDescription') as HTMLInputElement).value,
+            lineAmount,
+            terms: (form.querySelector('#terms') as HTMLInputElement).value,
+            location: extractedData.location,
+            memo: (form.querySelector('#memo') as HTMLTextAreaElement).value,
+            currency: (form.querySelector('#currency') as HTMLInputElement).value,
+          };
+
+          modal.remove();
+          resolve(formData);
         });
 
-        // Show alert asking user to open popup
-        const userConfirmed = confirm(
-          'Some required fields are missing. Click OK to open the popup and fill them in, or Cancel to skip.'
-        );
-
-        if (!userConfirmed) {
-          chrome.storage.local.remove('pendingBillExtraction');
+        // Handle cancel
+        cancelBtn.addEventListener('click', () => {
+          modal.remove();
           resolve(null);
-          return;
-        }
-
-        // Try to send message to popup if it's already open
-        chrome.runtime.sendMessage({
-          type: 'SHOW_MISSING_FIELDS_FORM',
-          missingFields,
-          extractedData,
-        }).catch(() => {
-          // Popup might not be open
-          console.log('Popup not open, waiting for user to open it...');
         });
 
-        // Listen for response from popup
-        const messageListener = (message: any) => {
-          if (message.type === 'MISSING_FIELDS_SUBMITTED') {
-            chrome.runtime.onMessage.removeListener(messageListener);
-            chrome.storage.local.remove('pendingBillExtraction');
-            resolve(message.data);
-          } else if (message.type === 'MISSING_FIELDS_CANCELLED') {
-            chrome.runtime.onMessage.removeListener(messageListener);
-            chrome.storage.local.remove('pendingBillExtraction');
+        // Click outside to close - listen on the first child div (overlay)
+        const overlay = modal.firstElementChild as HTMLElement;
+        overlay.addEventListener('click', (e) => {
+          // Only close if clicking directly on the overlay, not on its children
+          if (e.target === overlay) {
+            modal.remove();
             resolve(null);
           }
-        };
-
-        chrome.runtime.onMessage.addListener(messageListener);
+        });
       });
     }
   },

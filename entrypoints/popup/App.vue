@@ -4,78 +4,37 @@
       <h1>Billing Extension</h1>
     </div>
     <div class="app__content">
-      <MissingFieldsForm
-        v-if="showMissingFieldsForm && missingFieldsData"
-        :missing-fields="missingFieldsData.missingFields"
-        :extracted-data="missingFieldsData.extractedData"
-        @submit="handleMissingFieldsSubmit"
-        @cancel="handleMissingFieldsCancel"
+      <BillList
+        v-if="!selectedBill"
+        ref="billListRef"
+        @bill-selected="selectedBill = $event"
+        @create-bill="showCreateForm = true"
       />
-      <template v-else>
-        <BillList
-          v-if="!selectedBill"
-          @bill-selected="selectedBill = $event"
-          @create-bill="showCreateForm = true"
-        />
-        <BillDetail
-          v-else
-          :bill="selectedBill"
-          @close="selectedBill = null"
-        />
-        <div v-if="showCreateForm" class="app__modal">
-          <div class="app__modal-content">
-            <BillForm @save="handleCreateBill" @cancel="showCreateForm = false" />
-          </div>
+      <BillDetail
+        v-else
+        :bill="selectedBill"
+        @close="selectedBill = null"
+      />
+      <div v-if="showCreateForm" class="app__modal">
+        <div class="app__modal-content">
+          <BillForm @save="handleCreateBill" @cancel="showCreateForm = false" />
         </div>
-      </template>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref } from 'vue';
 import BillList from '../../components/organisms/BillList.vue';
 import BillDetail from '../../components/organisms/BillDetail.vue';
 import BillForm from '../../components/molecules/BillForm.vue';
-import MissingFieldsForm from '../../components/molecules/MissingFieldsForm.vue';
 import { billService } from '../../services/billService';
 import type { BillProjection } from '../../services/database';
-import type { MissingFieldInfo, BillExtractionResult } from '../../services/promptApiService';
 
 const selectedBill = ref<BillProjection | null>(null);
 const showCreateForm = ref(false);
-const showMissingFieldsForm = ref(false);
-const missingFieldsData = ref<{
-  missingFields: MissingFieldInfo[];
-  extractedData: Partial<BillExtractionResult>;
-} | null>(null);
-
-onMounted(() => {
-  // Check for pending extraction data
-  chrome.storage.local.get('pendingBillExtraction', (result) => {
-    if (result.pendingBillExtraction) {
-      const data = result.pendingBillExtraction;
-      missingFieldsData.value = {
-        missingFields: data.missingFields,
-        extractedData: data.extractedData,
-      };
-      showMissingFieldsForm.value = true;
-    }
-  });
-
-  // Listen for messages from content script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'SHOW_MISSING_FIELDS_FORM') {
-      missingFieldsData.value = {
-        missingFields: message.missingFields,
-        extractedData: message.extractedData,
-      };
-      showMissingFieldsForm.value = true;
-      sendResponse({ success: true });
-    }
-    return true; // Return true for async response
-  });
-});
+const billListRef = ref<any>(null);
 
 const handleCreateBill = async (data: any) => {
   await billService.createBill({
@@ -84,35 +43,10 @@ const handleCreateBill = async (data: any) => {
     dueDate: new Date(data.dueDate),
   });
   showCreateForm.value = false;
-  // Refresh the list by closing and reopening
   selectedBill.value = null;
-};
-
-const handleMissingFieldsSubmit = async (formData: Record<string, string | number>) => {
-  if (!missingFieldsData.value) return;
-
-  // Merge form data with extracted data
-  const mergedData = {
-    ...missingFieldsData.value.extractedData,
-    ...formData,
-  };
-
-  // Send data back to content script
-  chrome.runtime.sendMessage({
-    type: 'MISSING_FIELDS_SUBMITTED',
-    data: mergedData,
-  });
-
-  showMissingFieldsForm.value = false;
-  missingFieldsData.value = null;
-};
-
-const handleMissingFieldsCancel = () => {
-  chrome.runtime.sendMessage({
-    type: 'MISSING_FIELDS_CANCELLED',
-  });
-  showMissingFieldsForm.value = false;
-  missingFieldsData.value = null;
+  if (billListRef.value && typeof billListRef.value.refresh === 'function') {
+    billListRef.value.refresh();
+  }
 };
 </script>
 

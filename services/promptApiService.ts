@@ -109,7 +109,9 @@ When given text from an email or document, extract the following fields:
 - lineAmount: Amount as a number
 - currency: Currency code (USD, EUR, GBP, etc.)
 
-Return your response as a JSON object matching the BillExtractionResult interface.`;
+For each field, also provide a CSS selector (or XPath if more appropriate) that could be used to extract that value from a web page. If no suitable selector exists, use an empty string.
+
+Return your response as a JSON object matching the schema provided, including both the field values and their corresponding selectors.`;
 
     const session = await LanguageModel.create({
       initialPrompts: [
@@ -137,24 +139,24 @@ Return your response as a JSON object matching the BillExtractionResult interfac
       throw new Error('Failed to create Prompt API session');
     }
 
-    const prompt = `Extract bill information from the following text:\n\n${text}\n\nReturn the result as JSON.`;
+    const prompt = `Extract bill information from the following text:\n\n${text}\n\nReturn the result as JSON. For each field in the schema, include both the extracted value and a selector that could be used to extract that value from a web page (CSS selector or XPath). If no suitable selector exists for a field, use an empty string for that selector.`;
 
     try {
       const schema = {
         "type": "object",
         "properties": {
-          "billNo": { "type": "string" },
-          "supplier": { "type": "string" },
-          "billDate": { "type": "string" },
-          "dueDate": { "type": "string" },
-          "terms": { "type": "string" },
-          "location": { "type": "string" },
-          "memo": { "type": "string" },
-          "account": { "type": "string" },
-          "lineDescription": { "type": "string" },
-          "lineAmount": { "type": "number" },
-          "currency": { "type": "string" },
-          "confidence": { "type": "number" }
+          "billNo": { "type": "string", "selector": "" },
+          "supplier": { "type": "string", "selector": "" },
+          "billDate": { "type": "string", "selector": "" },
+          "dueDate": { "type": "string", "selector": "" },
+          "terms": { "type": "string", "selector": "" },
+          "location": { "type": "string", "selector": "" },
+          "memo": { "type": "string", "selector": "" },
+          "account": { "type": "string", "selector": "" },
+          "lineDescription": { "type": "string", "selector": "" },
+          "lineAmount": { "type": "number", "selector": "" },
+          "currency": { "type": "string", "selector": "" },
+          "confidence": { "type": "number", "selector": "" }
         },
         "required": ["billNo", "supplier", "billDate", "dueDate", "account", "lineDescription", "lineAmount", "confidence"]
       };
