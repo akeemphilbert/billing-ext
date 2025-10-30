@@ -37,21 +37,32 @@ export const useEventStore = () => {
    * @param newEvents Array of domain events to append
    */
   const appendEvents = async (newEvents: DomainEvent[]): Promise<void> => {
-    const billEvents: DomainEvent[] = [];
+    try {
+      const billEvents: DomainEvent[] = [];
 
-    // Categorize events
-    for (const event of newEvents) {
-      if (event.type.startsWith('bill.')) {
-        billEvents.push(event);
+      // Categorize events
+      for (const event of newEvents) {
+        if (event.type.startsWith('bill.')) {
+          billEvents.push(event);
+        }
       }
-    }
 
-    // Process bill events
-    if (billEvents.length > 0) {
-      await db.billEvents.bulkAdd(billEvents);
-      for (const event of billEvents) {
-        await db.updateBillProjection(event);
+      // Process bill events
+      if (billEvents.length > 0) {
+        console.log('Appending events to store:', billEvents);
+        await db.billEvents.bulkAdd(billEvents);
+        console.log('Events added to store successfully');
+        
+        for (const event of billEvents) {
+          await db.updateBillProjection(event);
+        }
+        console.log('Projections updated successfully');
+      } else {
+        console.warn('No bill events to append');
       }
+    } catch (error) {
+      console.error('Error appending events:', error);
+      throw error;
     }
   };
 

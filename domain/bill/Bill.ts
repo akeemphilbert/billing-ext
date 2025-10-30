@@ -21,6 +21,7 @@ export class Bill extends AggregateRoot {
   private _createdAt: Date;
   private _updatedAt: Date;
   private _deleted: boolean;
+  private _exported: boolean;
 
   /**
    * Private constructor for creating new bills
@@ -55,6 +56,7 @@ export class Bill extends AggregateRoot {
     this._createdAt = new Date();
     this._updatedAt = new Date();
     this._deleted = false;
+    this._exported = false;
   }
 
   /**
@@ -91,7 +93,7 @@ export class Bill extends AggregateRoot {
     
     const event = createDomainEvent(
       'bill.created',
-      bill,
+      bill.toSnapshot(),
       bill.id,
       bill.sequenceNo + 1
     );
@@ -233,11 +235,36 @@ export class Bill extends AggregateRoot {
   }
 
   /**
+   * Marks the bill as exported
+   */
+  markAsExported(): void {
+    if (this._deleted) {
+      throw new Error('Cannot export a deleted bill');
+    }
+
+    if (this._exported) {
+      return; // Already exported
+    }
+
+    this._exported = true;
+    this._updatedAt = new Date();
+
+    const event = createDomainEvent(
+      'bill.exported',
+      this.toSnapshot(),
+      this.id,
+      this.sequenceNo + 1
+    );
+    
+    this.applyEvent(event);
+  }
+
+  /**
    * Creates a snapshot of the current bill state
    */
   toSnapshot(): any {
     return {
-      id: this._billNo,
+      id: this.id,
       billNo: this._billNo,
       supplier: this._supplier,
       billDate: this._billDate,
@@ -252,7 +279,95 @@ export class Bill extends AggregateRoot {
       createdAt: this._createdAt,
       updatedAt: this._updatedAt,
       deleted: this._deleted,
+      exported: this._exported,
     };
+  }
+
+  /**
+   * Applies domain events to restore state
+   * @param event The domain event to apply
+   */
+  protected apply(event: DomainEvent): void {
+    switch (event.type) {
+      case 'bill.created':
+        this.applyBillCreated(event);
+        break;
+      case 'bill.updated':
+        this.applyBillUpdated(event);
+        break;
+      case 'bill.deleted':
+        this.applyBillDeleted(event);
+        break;
+      case 'bill.exported':
+        this.applyBillExported(event);
+        break;
+    }
+  }
+
+  /**
+   * Applies a BillCreated event
+   */
+  private applyBillCreated(event: DomainEvent): void {
+    const data = event.data as any;
+    this._billNo = data.billNo;
+    this._supplier = data.supplier;
+    this._billDate = data.billDate instanceof Date ? data.billDate : new Date(data.billDate);
+    this._dueDate = data.dueDate instanceof Date ? data.dueDate : new Date(data.dueDate);
+    this._terms = data.terms;
+    this._location = data.location;
+    this._memo = data.memo;
+    this._account = data.account;
+    this._lineDescription = data.lineDescription;
+    this._lineAmount = data.lineAmount;
+    this._currency = data.currency;
+    this._createdAt = data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt);
+    this._updatedAt = data.updatedAt instanceof Date ? data.updatedAt : new Date(data.updatedAt);
+    this._deleted = data.deleted || false;
+    this._exported = data.exported || false;
+  }
+
+  /**
+   * Applies a BillUpdated event
+   */
+  private applyBillUpdated(event: DomainEvent): void {
+    const data = event.data as any;
+    if (data.billNo !== undefined) this._billNo = data.billNo;
+    if (data.supplier !== undefined) this._supplier = data.supplier;
+    if (data.billDate !== undefined) {
+      this._billDate = data.billDate instanceof Date ? data.billDate : new Date(data.billDate);
+    }
+    if (data.dueDate !== undefined) {
+      this._dueDate = data.dueDate instanceof Date ? data.dueDate : new Date(data.dueDate);
+    }
+    if (data.terms !== undefined) this._terms = data.terms;
+    if (data.location !== undefined) this._location = data.location;
+    if (data.memo !== undefined) this._memo = data.memo;
+    if (data.account !== undefined) this._account = data.account;
+    if (data.lineDescription !== undefined) this._lineDescription = data.lineDescription;
+    if (data.lineAmount !== undefined) this._lineAmount = data.lineAmount;
+    if (data.currency !== undefined) this._currency = data.currency;
+    if (data.updatedAt !== undefined) {
+      this._updatedAt = data.updatedAt instanceof Date ? data.updatedAt : new Date(data.updatedAt);
+    }
+    if (data.exported !== undefined) {
+      this._exported = data.exported;
+    }
+  }
+
+  /**
+   * Applies a BillDeleted event
+   */
+  private applyBillDeleted(event: DomainEvent): void {
+    this._deleted = true;
+    this._updatedAt = new Date();
+  }
+
+  /**
+   * Applies a BillExported event
+   */
+  private applyBillExported(event: DomainEvent): void {
+    this._exported = true;
+    this._updatedAt = new Date();
   }
 
   // Getters
@@ -310,5 +425,9 @@ export class Bill extends AggregateRoot {
 
   get deleted(): boolean {
     return this._deleted;
+  }
+
+  get exported(): boolean {
+    return this._exported;
   }
 }

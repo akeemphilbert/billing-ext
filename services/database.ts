@@ -18,6 +18,7 @@ export interface BillProjection {
   created_at: string;
   updated_at: string;
   deleted: boolean;
+  exported: boolean;
 }
 
 // Define the database schema
@@ -36,6 +37,7 @@ export class BillingDatabase extends Dexie {
       billEvents: '++id, aggregateId, type, sequenceNo, timestamp',
       
       // Projection stores with indexes for queries
+      // Note: We don't index 'deleted' to avoid schema complexity - we'll filter in memory
       billProjections: 'id, billNo, supplier, account, created_at',
     });
   }
@@ -56,6 +58,9 @@ export class BillingDatabase extends Dexie {
         case 'bill.deleted':
           await this.handleBillDeleted(event);
           break;
+        case 'bill.exported':
+          await this.handleBillExported(event);
+          break;
       }
     } catch (error) {
       console.error('Error updating bill projection:', error);
@@ -69,22 +74,39 @@ export class BillingDatabase extends Dexie {
     console.log('Handling BillCreated event:', event);
     const billData = event.data as any;
     console.log('Bill data:', billData);
+    
+    // Helper to convert date to ISO string (handles both Date objects and ISO strings)
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        // If already a string, validate it's ISO format, otherwise try to parse
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
     const projection: BillProjection = {
       id: event.aggregateId, // Use aggregateId from event
-      billNo: billData.billNo,
-      supplier: billData.supplier,
-      billDate: billData.billDate instanceof Date ? billData.billDate.toISOString() : billData.billDate,
-      dueDate: billData.dueDate instanceof Date ? billData.dueDate.toISOString() : billData.dueDate,
+      billNo: billData.billNo || '',
+      supplier: billData.supplier || '',
+      billDate: toISOString(billData.billDate),
+      dueDate: toISOString(billData.dueDate),
       terms: billData.terms,
       location: billData.location,
       memo: billData.memo,
-      account: billData.account,
-      lineDescription: billData.lineDescription,
-      lineAmount: billData.lineAmount,
+      account: billData.account || '',
+      lineDescription: billData.lineDescription || '',
+      lineAmount: billData.lineAmount || 0,
       currency: billData.currency,
-      created_at: billData.createdAt.toISOString(),
-      updated_at: billData.updatedAt.toISOString(),
+      created_at: toISOString(billData.createdAt),
+      updated_at: toISOString(billData.updatedAt),
       deleted: billData.deleted || false,
+      exported: billData.exported || false,
     };
     
     console.log('Creating projection:', projection);
@@ -99,21 +121,36 @@ export class BillingDatabase extends Dexie {
     const billData = event.data as any;
     const existingProjection = await this.billProjections.get(event.aggregateId);
     
+    // Helper to convert date to ISO string (handles both Date objects and ISO strings)
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
     if (existingProjection) {
       const updatedProjection: BillProjection = {
         ...existingProjection,
-        billNo: billData.billNo,
-        supplier: billData.supplier,
-        billDate: billData.billDate instanceof Date ? billData.billDate.toISOString() : billData.billDate,
-        dueDate: billData.dueDate instanceof Date ? billData.dueDate.toISOString() : billData.dueDate,
-        terms: billData.terms,
-        location: billData.location,
-        memo: billData.memo,
-        account: billData.account,
-        lineDescription: billData.lineDescription,
-        lineAmount: billData.lineAmount,
-        currency: billData.currency,
-        updated_at: billData.updatedAt.toISOString(),
+        billNo: billData.billNo !== undefined ? billData.billNo : existingProjection.billNo,
+        supplier: billData.supplier !== undefined ? billData.supplier : existingProjection.supplier,
+        billDate: billData.billDate !== undefined ? toISOString(billData.billDate) : existingProjection.billDate,
+        dueDate: billData.dueDate !== undefined ? toISOString(billData.dueDate) : existingProjection.dueDate,
+        terms: billData.terms !== undefined ? billData.terms : existingProjection.terms,
+        location: billData.location !== undefined ? billData.location : existingProjection.location,
+        memo: billData.memo !== undefined ? billData.memo : existingProjection.memo,
+        account: billData.account !== undefined ? billData.account : existingProjection.account,
+        lineDescription: billData.lineDescription !== undefined ? billData.lineDescription : existingProjection.lineDescription,
+        lineAmount: billData.lineAmount !== undefined ? billData.lineAmount : existingProjection.lineAmount,
+        currency: billData.currency !== undefined ? billData.currency : existingProjection.currency,
+        updated_at: billData.updatedAt !== undefined ? toISOString(billData.updatedAt) : new Date().toISOString(),
+        exported: billData.exported !== undefined ? billData.exported : existingProjection.exported,
       };
       
       await this.billProjections.put(updatedProjection);
@@ -128,11 +165,58 @@ export class BillingDatabase extends Dexie {
   }
 
   /**
+   * Handle BillExported events
+   */
+  private async handleBillExported(event: DomainEvent): Promise<void> {
+    const billData = event.data as any;
+    const existingProjection = await this.billProjections.get(event.aggregateId);
+    
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
+    if (existingProjection) {
+      const updatedProjection: BillProjection = {
+        ...existingProjection,
+        exported: true,
+        updated_at: billData.updatedAt !== undefined ? toISOString(billData.updatedAt) : new Date().toISOString(),
+      };
+      
+      await this.billProjections.put(updatedProjection);
+    }
+  }
+
+  /**
    * Get all bills
    * @returns Array of bill projections
    */
   async getAllBills(): Promise<BillProjection[]> {
-    return await this.billProjections.where('deleted').equals(false).toArray();
+    try {
+      // Ensure database is open
+      if (!this.isOpen()) {
+        await this.open();
+      }
+      
+      // Get all bills and filter out deleted ones in memory
+      // This avoids needing an index on 'deleted' and is simpler
+      const allBills = await this.billProjections.toArray();
+      const activeBills = allBills.filter(bill => !bill.deleted || bill.deleted === false);
+      console.log('Database getAllBills: found', activeBills.length, 'active bills out of', allBills.length, 'total');
+      return activeBills;
+    } catch (error) {
+      console.error('Error in database getAllBills:', error);
+      // Return empty array on error rather than throwing, to prevent UI crashes
+      return [];
+    }
   }
 
   /**

@@ -1,5 +1,4 @@
 import { promptApiService } from '../services/promptApiService';
-import { billService } from '../services/billService';
 
 export default defineContentScript({
   matches: [
@@ -81,7 +80,7 @@ export default defineContentScript({
     }
 
     // Listen for messages from background script
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response: any) => void) => {
       if (message.type === 'MARK_AS_BILL') {
         handleMarkAsBill(message.text).then(result => {
           sendResponse({ success: result });
@@ -91,6 +90,7 @@ export default defineContentScript({
         });
         return true; // Return true to indicate async response
       }
+      return false;
     });
 
     async function handleMarkAsBill(text: string) {
@@ -114,25 +114,36 @@ export default defineContentScript({
           return false;
         }
 
-        // Use confirmed/edited data to create bill
-        const bill = await billService.createBill({
-          billNo: confirmedData.billNo || 'AUTO-' + Date.now(),
-          supplier: confirmedData.supplier,
-          billDate: new Date(confirmedData.billDate),
-          dueDate: new Date(confirmedData.dueDate),
-          account: confirmedData.account || 'Expense',
-          lineDescription: confirmedData.lineDescription || '',
-          lineAmount: confirmedData.lineAmount,
-          terms: confirmedData.terms,
-          location: confirmedData.location,
-          memo: confirmedData.memo,
-          currency: confirmedData.currency,
-        });
+        // Send bill data to background script to save in extension context
+        try {
+          const response = await browser.runtime.sendMessage({
+            type: 'CREATE_BILL',
+            billData: {
+              billNo: confirmedData.billNo || 'AUTO-' + Date.now(),
+              supplier: confirmedData.supplier,
+              billDate: confirmedData.billDate,
+              dueDate: confirmedData.dueDate,
+              account: confirmedData.account || 'Expense',
+              lineDescription: confirmedData.lineDescription || '',
+              lineAmount: confirmedData.lineAmount,
+              terms: confirmedData.terms,
+              location: confirmedData.location,
+              memo: confirmedData.memo,
+              currency: confirmedData.currency,
+            }
+          }) as { success?: boolean; billId?: string; error?: string };
 
-        console.log('Bill created successfully:', bill);
-        
-        // Show success notification
-        alert('Bill saved successfully!');
+          if (response && response.success) {
+            console.log('Bill created successfully:', response.billId);
+            alert('Bill saved successfully!');
+          } else {
+            console.error('Failed to create bill:', response?.error);
+            alert('Failed to save bill: ' + (response?.error || 'Unknown error'));
+          }
+        } catch (error) {
+          console.error('Error sending message to background:', error);
+          alert('Failed to save bill. Please try again.');
+        }
         
         return true;
       } catch (error) {

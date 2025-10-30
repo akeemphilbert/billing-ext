@@ -1,9 +1,25 @@
+import { billService } from '../services/billService';
+import { useEventStore } from '../stores/eventStore';
+import { db } from '../services/database';
+
 export default defineBackground(() => {
   console.log('Background script loaded');
 
+  // Initialize database and event store
+  (async () => {
+    try {
+      await db.open();
+      const eventStore = useEventStore();
+      await eventStore.initialize();
+      console.log('Background: Database and event store initialized');
+    } catch (error) {
+      console.error('Background: Failed to initialize database:', error);
+    }
+  })();
+
   // Create context menu item
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.create({
+  browser.runtime.onInstalled.addListener(() => {
+    browser.contextMenus.create({
       id: 'mark-as-bill',
       title: 'Mark as Bill',
       contexts: ['selection', 'editable'],
@@ -17,12 +33,12 @@ export default defineBackground(() => {
   });
 
   // Handle context menu clicks
-  chrome.contextMenus.onClicked.addListener((info, tab) => {
+  browser.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === 'mark-as-bill' && tab?.id) {
       const selectedText = info.selectionText || '';
       
       // Send message to content script with selected text
-      chrome.tabs.sendMessage(tab.id, {
+      browser.tabs.sendMessage(tab.id, {
         type: 'MARK_AS_BILL',
         text: selectedText
       }).catch(err => {
@@ -30,6 +46,65 @@ export default defineBackground(() => {
       });
     }
   });
+
+  // Handle messages from content script to save bills
+  browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response: any) => void) => {
+    if (message.type === 'CREATE_BILL') {
+      handleCreateBill(message.billData)
+        .then((bill) => {
+          sendResponse({ success: true, billId: bill.id });
+        })
+        .catch((error) => {
+          console.error('Background: Failed to create bill:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+      return true; // Keep message channel open for async response
+    }
+    return false;
+  });
+
+  /**
+   * Handle bill creation in extension context (where IndexedDB is accessible)
+   */
+  async function handleCreateBill(billData: {
+    billNo: string;
+    supplier: string;
+    billDate: string;
+    dueDate: string;
+    account: string;
+    lineDescription: string;
+    lineAmount: number;
+    terms?: string;
+    location?: string;
+    memo?: string;
+    currency?: string;
+  }) {
+    console.log('Background: Creating bill with data:', billData);
+    
+    // Convert date strings to Date objects
+    const bill = await billService.createBill({
+      ...billData,
+      billDate: new Date(billData.billDate),
+      dueDate: new Date(billData.dueDate),
+    });
+    
+    console.log('Background: Bill created successfully:', bill.id);
+    
+    // Notify any open popups that a bill was created
+    try {
+      // Try to send message to popup if it's open
+      browser.runtime.sendMessage({
+        type: 'BILL_CREATED',
+        billId: bill.id
+      }).catch(() => {
+        // Popup might not be open, ignore error
+      });
+    } catch (error) {
+      // Ignore - popup might not be open
+    }
+    
+    return bill;
+  }
 });
 
 

@@ -25,27 +25,48 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import BillList from '../../components/organisms/BillList.vue';
 import BillDetail from '../../components/organisms/BillDetail.vue';
 import BillForm from '../../components/molecules/BillForm.vue';
 import { billService } from '../../services/billService';
+import { useEventStore } from '../../stores/eventStore';
+import { db } from '../../services/database';
 import type { BillProjection } from '../../services/database';
 
 const selectedBill = ref<BillProjection | null>(null);
 const showCreateForm = ref(false);
 const billListRef = ref<any>(null);
+const eventStore = useEventStore();
+
+// Initialize event store and database on mount
+onMounted(async () => {
+  try {
+    // Ensure database is open
+    await db.open();
+    // Initialize event store
+    await eventStore.initialize();
+    console.log('Billing extension initialized');
+  } catch (error) {
+    console.error('Failed to initialize billing extension:', error);
+  }
+});
 
 const handleCreateBill = async (data: any) => {
-  await billService.createBill({
-    ...data,
-    billDate: new Date(data.billDate),
-    dueDate: new Date(data.dueDate),
-  });
-  showCreateForm.value = false;
-  selectedBill.value = null;
-  if (billListRef.value && typeof billListRef.value.refresh === 'function') {
-    billListRef.value.refresh();
+  try {
+    await billService.createBill({
+      ...data,
+      billDate: new Date(data.billDate),
+      dueDate: new Date(data.dueDate),
+    });
+    showCreateForm.value = false;
+    selectedBill.value = null;
+    if (billListRef.value && typeof billListRef.value.refresh === 'function') {
+      billListRef.value.refresh();
+    }
+  } catch (error) {
+    console.error('Failed to create bill:', error);
+    alert('Failed to save bill. Please check the console for details.');
   }
 };
 </script>
