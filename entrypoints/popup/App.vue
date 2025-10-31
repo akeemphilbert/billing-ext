@@ -2,18 +2,26 @@
   <div class="app">
     <div class="app__header">
       <h1>Billing Extension</h1>
+      <BaseButton 
+        v-if="!selectedBill && !showCreateForm"
+        variant="primary" 
+        size="small" 
+        @click="showCreateForm = true"
+      >
+        + Add Bill
+      </BaseButton>
     </div>
     <div class="app__content">
       <BillList
-        v-if="!selectedBill"
+        v-if="!selectedBill && !showCreateForm"
         ref="billListRef"
         @bill-selected="selectedBill = $event"
-        @create-bill="showCreateForm = true"
       />
       <BillDetail
         v-else
         :bill="selectedBill"
         @close="selectedBill = null"
+        @deleted="handleBillDeleted"
       />
       <div v-if="showCreateForm" class="app__modal">
         <div class="app__modal-content">
@@ -29,6 +37,7 @@ import { ref, onMounted } from 'vue';
 import BillList from '../../components/organisms/BillList.vue';
 import BillDetail from '../../components/organisms/BillDetail.vue';
 import BillForm from '../../components/molecules/BillForm.vue';
+import BaseButton from '../../components/atoms/BaseButton.vue';
 import { billService } from '../../services/billService';
 import { useEventStore } from '../../stores/eventStore';
 import { db } from '../../services/database';
@@ -69,6 +78,13 @@ const handleCreateBill = async (data: any) => {
     alert('Failed to save bill. Please check the console for details.');
   }
 };
+
+const handleBillDeleted = () => {
+  selectedBill.value = null;
+  if (billListRef.value && typeof billListRef.value.refresh === 'function') {
+    billListRef.value.refresh();
+  }
+};
 </script>
 
 <style scoped>
@@ -80,6 +96,9 @@ const handleCreateBill = async (data: any) => {
 }
 
 .app__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 1rem;
   border-bottom: 1px solid #eee;
 }

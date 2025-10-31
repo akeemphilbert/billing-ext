@@ -18,6 +18,15 @@ interface BillExtractionResult {
   confidence: number;
 }
 
+interface VendorInfo {
+  name: string;
+}
+
+interface AccountInfo {
+  code: string;
+  name: string;
+}
+
 interface ValidationResult {
   isValid: boolean;
   missingFields: MissingFieldInfo[];
@@ -93,8 +102,8 @@ class PromptApiService {
   /**
    * Create a session for extracting bill data
    */
-  async createSession(): Promise<any> {
-    const systemContent = `You are a bill extraction assistant. Your task is to extract structured bill information from text provided by the user.
+  async createSession(vendors?: VendorInfo[], accounts?: AccountInfo[]): Promise<any> {
+    let systemContent = `You are a bill extraction assistant. Your task is to extract structured bill information from text provided by the user.
 
 When given text from an email or document, extract the following fields:
 - billNo: Bill or invoice number
@@ -109,9 +118,43 @@ When given text from an email or document, extract the following fields:
 - lineAmount: Amount as a number
 - currency: Currency code (USD, EUR, GBP, etc.)
 
-For each field, also provide a CSS selector (or XPath if more appropriate) that could be used to extract that value from a web page. If no suitable selector exists, use an empty string.
+For each field, also provide a CSS selector (or XPath if more appropriate) that could be used to extract that value from a web page. If no suitable selector exists, use an empty string.`;
 
-Return your response as a JSON object matching the schema provided, including both the field values and their corresponding selectors.`;
+    // Add vendor matching instructions if vendors are provided
+    if (vendors && vendors.length > 0) {
+      const vendorList = vendors.map(v => v.name).join(', ');
+      systemContent += `\n\nEXISTING VENDORS/SUPPLIERS:
+The following vendors already exist in the system:
+${vendorList}
+
+IMPORTANT: When extracting the supplier name, try to match it to one of these existing vendors. Use fuzzy matching:
+- Match the extracted supplier name to the closest existing vendor name (handling variations, abbreviations, etc.)
+- If there's a good match (high confidence), use the EXACT existing vendor name from the list above
+- If there's no match or the match confidence is low, use the extracted supplier name as-is (a new vendor will be created)
+
+For example:
+- If text says "Acme Corp" and existing vendors include "Acme Corporation", match to "Acme Corporation"
+- If text says "John's Supplies" and no close match exists, use "John's Supplies" as-is`;
+    }
+
+    // Add account matching instructions if accounts are provided
+    if (accounts && accounts.length > 0) {
+      const accountList = accounts.map(a => `${a.code} (${a.name})`).join(', ');
+      systemContent += `\n\nEXISTING ACCOUNTS:
+The following accounts already exist in the system:
+${accountList}
+
+IMPORTANT: When extracting the account, try to match it to one of these existing accounts:
+- Match the extracted account name/code to the closest existing account (by code or name)
+- If there's a good match (high confidence), use the EXACT account CODE from the list above
+- If there's no match or the match confidence is low, use the extracted account as-is (a new account will be created)
+
+For example:
+- If text says "Office Expenses" and existing accounts include "6001 (Office Expenses)", use "6001"
+- If text says "New Category" and no close match exists, use "New Category" as-is`;
+    }
+
+    systemContent += `\n\nReturn your response as a JSON object matching the schema provided, including both the field values and their corresponding selectors.`;
 
     const session = await LanguageModel.create({
       initialPrompts: [
@@ -129,17 +172,31 @@ Return your response as a JSON object matching the schema provided, including bo
   /**
    * Extract bill data from highlighted text
    */
-  async extractBillData(text: string): Promise<BillExtractionResult> {
-    if (!this.session) {
-      // Create session if it doesn't exist
-      await this.createSession();
-    }
+  async extractBillData(
+    text: string, 
+    vendors?: VendorInfo[], 
+    accounts?: AccountInfo[]
+  ): Promise<BillExtractionResult> {
+    // Always create a new session with current vendors/accounts to ensure fresh context
+    // This ensures the AI has the latest vendor and account lists
+    this.session = null;
+    await this.createSession(vendors, accounts);
 
     if (!this.session) {
       throw new Error('Failed to create Prompt API session');
     }
 
-    const prompt = `Extract bill information from the following text:\n\n${text}\n\nReturn the result as JSON. For each field in the schema, include both the extracted value and a selector that could be used to extract that value from a web page (CSS selector or XPath). If no suitable selector exists for a field, use an empty string for that selector.`;
+    let prompt = `Extract bill information from the following text:\n\n${text}\n\n`;
+
+    if (vendors && vendors.length > 0) {
+      prompt += `Remember to match the supplier to existing vendors if possible: ${vendors.map(v => v.name).join(', ')}\n\n`;
+    }
+
+    if (accounts && accounts.length > 0) {
+      prompt += `Remember to match the account to existing accounts if possible (use the CODE): ${accounts.map(a => `${a.code} (${a.name})`).join(', ')}\n\n`;
+    }
+
+    prompt += `Return the result as JSON. For each field in the schema, include both the extracted value and a selector that could be used to extract that value from a web page (CSS selector or XPath). If no suitable selector exists for a field, use an empty string for that selector.`;
 
     try {
       const schema = {

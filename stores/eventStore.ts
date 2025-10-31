@@ -25,10 +25,16 @@ export const useEventStore = () => {
    * @param event The domain event to append
    */
   const appendEvent = async (event: DomainEvent): Promise<void> => {
-    // Determine which event store to use based on event type
+    // Add event to unified events table
+    await db.events.add(event);
+    
+    // Update appropriate projection based on event type
     if (event.type.startsWith('bill.')) {
-      await db.billEvents.add(event);
       await db.updateBillProjection(event);
+    } else if (event.type.startsWith('vendor.')) {
+      await db.updateVendorProjection(event);
+    } else if (event.type.startsWith('account.')) {
+      await db.updateAccountProjection(event);
     }
   };
 
@@ -38,28 +44,27 @@ export const useEventStore = () => {
    */
   const appendEvents = async (newEvents: DomainEvent[]): Promise<void> => {
     try {
-      const billEvents: DomainEvent[] = [];
+      if (newEvents.length === 0) {
+        console.warn('No events to append');
+        return;
+      }
 
-      // Categorize events
+      // Add all events to unified events table
+      console.log('Appending events to store:', newEvents);
+      await db.events.bulkAdd(newEvents);
+      console.log('Events added to store successfully');
+      
+      // Update projections based on event type
       for (const event of newEvents) {
         if (event.type.startsWith('bill.')) {
-          billEvents.push(event);
-        }
-      }
-
-      // Process bill events
-      if (billEvents.length > 0) {
-        console.log('Appending events to store:', billEvents);
-        await db.billEvents.bulkAdd(billEvents);
-        console.log('Events added to store successfully');
-        
-        for (const event of billEvents) {
           await db.updateBillProjection(event);
+        } else if (event.type.startsWith('vendor.')) {
+          await db.updateVendorProjection(event);
+        } else if (event.type.startsWith('account.')) {
+          await db.updateAccountProjection(event);
         }
-        console.log('Projections updated successfully');
-      } else {
-        console.warn('No bill events to append');
       }
+      console.log('Projections updated successfully');
     } catch (error) {
       console.error('Error appending events:', error);
       throw error;
@@ -72,7 +77,8 @@ export const useEventStore = () => {
    * @returns Array of events for the aggregate
    */
   const getEventsByAggregateId = async (aggregateId: string): Promise<DomainEvent[]> => {
-    return await db.billEvents.where('aggregateId').equals(aggregateId).toArray();
+    const events = await db.events.where('aggregateId').equals(aggregateId).toArray();
+    return events.sort((a, b) => a.sequenceNo - b.sequenceNo);
   };
 
   /**
@@ -80,7 +86,8 @@ export const useEventStore = () => {
    * @returns Array of all events
    */
   const getAllEvents = async (): Promise<DomainEvent[]> => {
-    return await db.billEvents.toArray();
+    const events = await db.events.toArray();
+    return events.sort((a, b) => a.timestamp - b.timestamp);
   };
 
   /**
@@ -89,7 +96,7 @@ export const useEventStore = () => {
    * @returns Array of events of the specified type
    */
   const getEventsByType = async (eventType: string): Promise<DomainEvent[]> => {
-    return await db.billEvents.where('type').equals(eventType).toArray();
+    return await db.events.where('type').equals(eventType).toArray();
   };
 
   /**
@@ -110,14 +117,14 @@ export const useEventStore = () => {
    * Clear all events (useful for testing or reset)
    */
   const clearEvents = async (): Promise<void> => {
-    await db.billEvents.clear();
+    await db.events.clear();
   };
 
   /**
    * Get event count
    */
   const getEventCount = async (): Promise<number> => {
-    return await db.billEvents.count();
+    return await db.events.count();
   };
 
   /**

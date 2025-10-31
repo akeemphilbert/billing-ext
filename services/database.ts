@@ -21,24 +21,108 @@ export interface BillProjection {
   exported: boolean;
 }
 
+export interface VendorProjection {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxId?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+  deleted: boolean;
+}
+
+export interface AccountProjection {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  accountType?: string;
+  created_at: string;
+  updated_at: string;
+  deleted: boolean;
+}
+
 // Define the database schema
 export class BillingDatabase extends Dexie {
-  // Event stores
-  billEvents!: Table<DomainEvent>;
+  // Event store (unified for all entities)
+  events!: Table<DomainEvent>;
   
   // Projection stores
   billProjections!: Table<BillProjection>;
+  vendorProjections!: Table<VendorProjection>;
+  accountProjections!: Table<AccountProjection>;
 
   constructor() {
     super('BillingDatabase');
     
+    // Version 1: Original schema with bills only
     this.version(1).stores({
-      // Event stores with indexes for efficient querying
       billEvents: '++id, aggregateId, type, sequenceNo, timestamp',
-      
-      // Projection stores with indexes for queries
-      // Note: We don't index 'deleted' to avoid schema complexity - we'll filter in memory
       billProjections: 'id, billNo, supplier, account, created_at',
+    });
+
+    // Version 2: Added vendors
+    this.version(2).stores({
+      billEvents: '++id, aggregateId, type, sequenceNo, timestamp',
+      vendorEvents: '++id, aggregateId, type, sequenceNo, timestamp',
+      billProjections: 'id, billNo, supplier, account, created_at',
+      vendorProjections: 'id, name, created_at',
+    });
+
+    // Version 3: Added accounts
+    this.version(3).stores({
+      billEvents: '++id, aggregateId, type, sequenceNo, timestamp',
+      vendorEvents: '++id, aggregateId, type, sequenceNo, timestamp',
+      accountEvents: '++id, aggregateId, type, sequenceNo, timestamp',
+      billProjections: 'id, billNo, supplier, account, created_at',
+      vendorProjections: 'id, name, created_at',
+      accountProjections: 'id, code, name, created_at',
+    });
+
+    // Version 4: Consolidated all events into a single table
+    this.version(4).stores({
+      events: '++id, aggregateId, type, sequenceNo, timestamp',
+      billProjections: 'id, billNo, supplier, account, created_at',
+      vendorProjections: 'id, name, created_at',
+      accountProjections: 'id, code, name, created_at',
+    }).upgrade(async (trans) => {
+      // Migrate existing events to unified table
+      // Check if old tables exist before trying to read from them
+      const allEvents: DomainEvent[] = [];
+      
+      try {
+        if (trans.table('billEvents')) {
+          const billEvents = await trans.table('billEvents').toArray();
+          allEvents.push(...billEvents);
+        }
+      } catch (e) {
+        // Table doesn't exist, skip
+      }
+      
+      try {
+        if (trans.table('vendorEvents')) {
+          const vendorEvents = await trans.table('vendorEvents').toArray();
+          allEvents.push(...vendorEvents);
+        }
+      } catch (e) {
+        // Table doesn't exist, skip
+      }
+      
+      try {
+        if (trans.table('accountEvents')) {
+          const accountEvents = await trans.table('accountEvents').toArray();
+          allEvents.push(...accountEvents);
+        }
+      } catch (e) {
+        // Table doesn't exist, skip
+      }
+      
+      if (allEvents.length > 0) {
+        await trans.table('events').bulkAdd(allEvents);
+      }
     });
   }
   
@@ -229,12 +313,318 @@ export class BillingDatabase extends Dexie {
   }
 
   /**
+   * Update vendor projection based on domain event
+   * @param event The domain event that occurred
+   */
+  async updateVendorProjection(event: DomainEvent): Promise<void> {
+    try {
+      switch (event.type) {
+        case 'vendor.created':
+          await this.handleVendorCreated(event);
+          break;
+        case 'vendor.updated':
+          await this.handleVendorUpdated(event);
+          break;
+        case 'vendor.deleted':
+          await this.handleVendorDeleted(event);
+          break;
+      }
+    } catch (error) {
+      console.error('Error updating vendor projection:', error);
+    }
+  }
+
+  /**
+   * Handle VendorCreated events
+   */
+  private async handleVendorCreated(event: DomainEvent): Promise<void> {
+    console.log('Handling VendorCreated event:', event);
+    const vendorData = event.data as any;
+    
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
+    const projection: VendorProjection = {
+      id: event.aggregateId,
+      name: vendorData.name || '',
+      email: vendorData.email,
+      phone: vendorData.phone,
+      address: vendorData.address,
+      taxId: vendorData.taxId,
+      notes: vendorData.notes,
+      created_at: toISOString(vendorData.createdAt),
+      updated_at: toISOString(vendorData.updatedAt),
+      deleted: vendorData.deleted || false,
+    };
+    
+    console.log('Creating vendor projection:', projection);
+    await this.vendorProjections.add(projection);
+    console.log('Vendor projection created successfully');
+  }
+
+  /**
+   * Handle VendorUpdated events
+   */
+  private async handleVendorUpdated(event: DomainEvent): Promise<void> {
+    const vendorData = event.data as any;
+    const existingProjection = await this.vendorProjections.get(event.aggregateId);
+    
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
+    if (existingProjection) {
+      const updatedProjection: VendorProjection = {
+        ...existingProjection,
+        name: vendorData.name !== undefined ? vendorData.name : existingProjection.name,
+        email: vendorData.email !== undefined ? vendorData.email : existingProjection.email,
+        phone: vendorData.phone !== undefined ? vendorData.phone : existingProjection.phone,
+        address: vendorData.address !== undefined ? vendorData.address : existingProjection.address,
+        taxId: vendorData.taxId !== undefined ? vendorData.taxId : existingProjection.taxId,
+        notes: vendorData.notes !== undefined ? vendorData.notes : existingProjection.notes,
+        updated_at: vendorData.updatedAt !== undefined ? toISOString(vendorData.updatedAt) : new Date().toISOString(),
+      };
+      
+      await this.vendorProjections.put(updatedProjection);
+    }
+  }
+
+  /**
+   * Handle VendorDeleted events
+   */
+  private async handleVendorDeleted(event: DomainEvent): Promise<void> {
+    await this.vendorProjections.delete(event.aggregateId);
+  }
+
+  /**
+   * Get all vendors
+   * @returns Array of vendor projections
+   */
+  async getAllVendors(): Promise<VendorProjection[]> {
+    try {
+      if (!this.isOpen()) {
+        await this.open();
+      }
+      
+      const allVendors = await this.vendorProjections.toArray();
+      const activeVendors = allVendors.filter(vendor => !vendor.deleted || vendor.deleted === false);
+      console.log('Database getAllVendors: found', activeVendors.length, 'active vendors out of', allVendors.length, 'total');
+      return activeVendors;
+    } catch (error) {
+      console.error('Error in database getAllVendors:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get a vendor by ID
+   * @param id The vendor ID
+   * @returns Vendor projection or undefined
+   */
+  async getVendorById(id: string): Promise<VendorProjection | undefined> {
+    return await this.vendorProjections.get(id);
+  }
+
+  /**
+   * Get a vendor by name (case-insensitive)
+   * @param name The vendor name
+   * @returns Vendor projection or undefined
+   */
+  async getVendorByName(name: string): Promise<VendorProjection | undefined> {
+    try {
+      if (!this.isOpen()) {
+        await this.open();
+      }
+      
+      const allVendors = await this.vendorProjections.toArray();
+      const vendor = allVendors.find(
+        v => !v.deleted && v.name.toLowerCase() === name.toLowerCase()
+      );
+      return vendor;
+    } catch (error) {
+      console.error('Error in database getVendorByName:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Update account projection based on domain event
+   * @param event The domain event that occurred
+   */
+  async updateAccountProjection(event: DomainEvent): Promise<void> {
+    try {
+      switch (event.type) {
+        case 'account.created':
+          await this.handleAccountCreated(event);
+          break;
+        case 'account.updated':
+          await this.handleAccountUpdated(event);
+          break;
+        case 'account.deleted':
+          await this.handleAccountDeleted(event);
+          break;
+      }
+    } catch (error) {
+      console.error('Error updating account projection:', error);
+    }
+  }
+
+  /**
+   * Handle AccountCreated events
+   */
+  private async handleAccountCreated(event: DomainEvent): Promise<void> {
+    console.log('Handling AccountCreated event:', event);
+    const accountData = event.data as any;
+    
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
+    const projection: AccountProjection = {
+      id: event.aggregateId,
+      code: accountData.code || '',
+      name: accountData.name || '',
+      description: accountData.description,
+      accountType: accountData.accountType,
+      created_at: toISOString(accountData.createdAt),
+      updated_at: toISOString(accountData.updatedAt),
+      deleted: accountData.deleted || false,
+    };
+    
+    console.log('Creating account projection:', projection);
+    await this.accountProjections.add(projection);
+    console.log('Account projection created successfully');
+  }
+
+  /**
+   * Handle AccountUpdated events
+   */
+  private async handleAccountUpdated(event: DomainEvent): Promise<void> {
+    const accountData = event.data as any;
+    const existingProjection = await this.accountProjections.get(event.aggregateId);
+    
+    const toISOString = (date: any): string => {
+      if (!date) return new Date().toISOString();
+      if (date instanceof Date) return date.toISOString();
+      if (typeof date === 'string') {
+        try {
+          return new Date(date).toISOString();
+        } catch {
+          return date;
+        }
+      }
+      return new Date().toISOString();
+    };
+    
+    if (existingProjection) {
+      const updatedProjection: AccountProjection = {
+        ...existingProjection,
+        code: accountData.code !== undefined ? accountData.code : existingProjection.code,
+        name: accountData.name !== undefined ? accountData.name : existingProjection.name,
+        description: accountData.description !== undefined ? accountData.description : existingProjection.description,
+        accountType: accountData.accountType !== undefined ? accountData.accountType : existingProjection.accountType,
+        updated_at: accountData.updatedAt !== undefined ? toISOString(accountData.updatedAt) : new Date().toISOString(),
+      };
+      
+      await this.accountProjections.put(updatedProjection);
+    }
+  }
+
+  /**
+   * Handle AccountDeleted events
+   */
+  private async handleAccountDeleted(event: DomainEvent): Promise<void> {
+    await this.accountProjections.delete(event.aggregateId);
+  }
+
+  /**
+   * Get all accounts
+   * @returns Array of account projections
+   */
+  async getAllAccounts(): Promise<AccountProjection[]> {
+    try {
+      if (!this.isOpen()) {
+        await this.open();
+      }
+      
+      const allAccounts = await this.accountProjections.toArray();
+      const activeAccounts = allAccounts.filter(account => !account.deleted || account.deleted === false);
+      console.log('Database getAllAccounts: found', activeAccounts.length, 'active accounts out of', allAccounts.length, 'total');
+      return activeAccounts;
+    } catch (error) {
+      console.error('Error in database getAllAccounts:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get an account by ID
+   * @param id The account ID
+   * @returns Account projection or undefined
+   */
+  async getAccountById(id: string): Promise<AccountProjection | undefined> {
+    return await this.accountProjections.get(id);
+  }
+
+  /**
+   * Get an account by code (case-insensitive)
+   * @param code The account code
+   * @returns Account projection or undefined
+   */
+  async getAccountByCode(code: string): Promise<AccountProjection | undefined> {
+    try {
+      if (!this.isOpen()) {
+        await this.open();
+      }
+      
+      const allAccounts = await this.accountProjections.toArray();
+      const account = allAccounts.find(
+        a => !a.deleted && a.code.toLowerCase() === code.toLowerCase()
+      );
+      return account;
+    } catch (error) {
+      console.error('Error in database getAccountByCode:', error);
+      return undefined;
+    }
+  }
+
+  /**
    * Clear all data from the database (useful for development/testing)
    */
   async clearAllData(): Promise<void> {
     console.log('Clearing all database data...');
-    await this.billEvents.clear();
+    await this.events.clear();
     await this.billProjections.clear();
+    await this.vendorProjections.clear();
+    await this.accountProjections.clear();
     console.log('Database cleared successfully');
   }
 }

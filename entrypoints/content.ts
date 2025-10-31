@@ -100,8 +100,30 @@ export default defineContentScript({
         // Show loading overlay
         showLoadingOverlay();
 
-        // Use Prompt API to extract bill data
-        let extractedData = await promptApiService.extractBillData(text);
+        // Fetch existing vendors and accounts from background script
+        let vendors: { name: string }[] = [];
+        let accounts: { code: string; name: string }[] = [];
+        
+        try {
+          const response = await browser.runtime.sendMessage({
+            type: 'GET_VENDORS_AND_ACCOUNTS'
+          }) as { success?: boolean; vendors?: { name: string }[]; accounts?: { code: string; name: string }[]; error?: string };
+          
+          if (response && response.success) {
+            vendors = response.vendors || [];
+            accounts = response.accounts || [];
+            console.log(`Loaded ${vendors.length} vendors and ${accounts.length} accounts for AI matching`);
+          } else {
+            console.warn('Failed to get vendors/accounts:', response?.error);
+            // Continue with empty lists if fetch fails
+          }
+        } catch (error) {
+          console.warn('Error fetching vendors/accounts:', error);
+          // Continue with empty lists if fetch fails
+        }
+
+        // Use Prompt API to extract bill data with vendor/account context
+        let extractedData = await promptApiService.extractBillData(text, vendors, accounts);
 
         // Hide loading overlay after extraction
         hideLoadingOverlay();

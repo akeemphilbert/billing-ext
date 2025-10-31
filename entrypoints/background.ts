@@ -1,4 +1,6 @@
 import { billService } from '../services/billService';
+import { vendorService } from '../services/vendorService';
+import { accountService } from '../services/accountService';
 import { useEventStore } from '../stores/eventStore';
 import { db } from '../services/database';
 
@@ -47,7 +49,7 @@ export default defineBackground(() => {
     }
   });
 
-  // Handle messages from content script to save bills
+  // Handle messages from content script
   browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response: any) => void) => {
     if (message.type === 'CREATE_BILL') {
       handleCreateBill(message.billData)
@@ -60,6 +62,19 @@ export default defineBackground(() => {
         });
       return true; // Keep message channel open for async response
     }
+    
+    if (message.type === 'GET_VENDORS_AND_ACCOUNTS') {
+      handleGetVendorsAndAccounts()
+        .then((data) => {
+          sendResponse({ success: true, ...data });
+        })
+        .catch((error) => {
+          console.error('Background: Failed to get vendors and accounts:', error);
+          sendResponse({ success: false, error: error.message, vendors: [], accounts: [] });
+        });
+      return true; // Keep message channel open for async response
+    }
+    
     return false;
   });
 
@@ -104,6 +119,25 @@ export default defineBackground(() => {
     }
     
     return bill;
+  }
+
+  /**
+   * Handle request for vendors and accounts
+   */
+  async function handleGetVendorsAndAccounts() {
+    try {
+      const vendors = await vendorService.getAllVendors();
+      const accounts = await accountService.getAllAccounts();
+      
+      return {
+        vendors: vendors.map(v => ({ name: v.name })),
+        accounts: accounts.map(a => ({ code: a.code, name: a.name }))
+      };
+    } catch (error) {
+      console.error('Background: Error getting vendors and accounts:', error);
+      // Return empty arrays on error
+      return { vendors: [], accounts: [] };
+    }
   }
 });
 

@@ -1,8 +1,18 @@
 <template>
-  <div class="bill-detail">
+  <div class="bill-detail" v-if="bill">
     <div class="bill-detail__header">
       <h2>{{ bill.supplier }}</h2>
-      <BaseButton variant="ghost" @click="$emit('close')">×</BaseButton>
+      <div class="bill-detail__header-actions">
+        <BaseButton 
+          variant="danger" 
+          size="small"
+          @click="handleDelete"
+          :disabled="deleting"
+        >
+          Delete
+        </BaseButton>
+        <BaseButton variant="ghost" @click="$emit('close')">×</BaseButton>
+      </div>
     </div>
     <BillForm 
       v-if="bill" 
@@ -14,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { BillProjection } from '../../services/database';
 import BillForm from '../molecules/BillForm.vue';
 import BaseButton from '../atoms/BaseButton.vue';
@@ -23,6 +33,8 @@ import { billService } from '../../services/billService';
 const props = defineProps<{
   bill: BillProjection | null;
 }>();
+
+const deleting = ref(false);
 
 const billData = computed(() => {
   if (!props.bill) return undefined;
@@ -51,8 +63,31 @@ const handleSave = async (data: any) => {
   emit('close');
 };
 
+const handleDelete = async () => {
+  if (!props.bill) return;
+  
+  const confirmed = window.confirm(
+    `Are you sure you want to delete the bill from ${props.bill.supplier}? This action cannot be undone.`
+  );
+  
+  if (!confirmed) return;
+  
+  deleting.value = true;
+  try {
+    await billService.deleteBill(props.bill.id);
+    emit('deleted');
+    emit('close');
+  } catch (error) {
+    console.error('Failed to delete bill:', error);
+    alert('Failed to delete bill. Please try again.');
+  } finally {
+    deleting.value = false;
+  }
+};
+
 const emit = defineEmits<{
   close: [];
+  deleted: [];
 }>();
 </script>
 
@@ -75,6 +110,12 @@ const emit = defineEmits<{
   margin: 0;
   font-weight: 600;
   color: #202020;
+}
+
+.bill-detail__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 </style>
 

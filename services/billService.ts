@@ -1,6 +1,8 @@
 import { Bill } from '../domain/bill/Bill';
 import { useEventStore } from '../stores/eventStore';
 import { db, type BillProjection } from './database';
+import { vendorService } from './vendorService';
+import { accountService } from './accountService';
 import { v4 as uuidv4 } from 'uuid';
 
 class BillService {
@@ -23,6 +25,25 @@ class BillService {
     currency?: string;
   }): Promise<Bill> {
     try {
+      // Check if vendor exists, create if not
+      const existingVendor = await vendorService.getVendorByName(data.supplier);
+      if (!existingVendor) {
+        console.log(`Vendor "${data.supplier}" not found, creating new vendor`);
+        await vendorService.createVendor({
+          name: data.supplier,
+        });
+      }
+
+      // Check if account exists, create if not
+      const existingAccount = await accountService.getAccountByCode(data.account);
+      if (!existingAccount) {
+        console.log(`Account "${data.account}" not found, creating new account`);
+        await accountService.createAccount({
+          code: data.account,
+          name: data.account, // Use code as name if no name is provided
+        });
+      }
+
       const id = uuidv4();
       const bill = Bill.create(
         id,

@@ -8,7 +8,7 @@
           :indeterminate="isIndeterminate"
           @update:model-value="toggleSelectAll"
         />
-        <h2>Bills</h2>
+        Select all
       </div>
       <div class="bill-list__header-right">
         <label class="bill-list__filter">
