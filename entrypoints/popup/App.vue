@@ -136,6 +136,8 @@ const handleBillDeleted = () => {
   max-width: 90%;
   max-height: 90%;
   overflow-y: auto;
+  position: relative;
+  z-index: 1001;
 }
 </style>
 

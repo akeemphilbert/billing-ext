@@ -1,8 +1,13 @@
+import { v4 as uuidv4 } from 'uuid';
+
 /**
  * Domain Event interface for event sourcing
  * @template T The type of data payload for the event
  */
 export interface DomainEvent<T = unknown> {
+  /** Unique identifier for this event */
+  readonly id: string;
+  
   /** Event type discriminator */
   readonly type: string;
   
@@ -34,6 +39,7 @@ export function createDomainEvent<T>(
   sequenceNo: number
 ): DomainEvent<T> {
   return {
+    id: uuidv4(),
     type,
     data,
     timestamp: new Date(),

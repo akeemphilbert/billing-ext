@@ -117,14 +117,19 @@ export const useEventStore = () => {
    * Clear all events (useful for testing or reset)
    */
   const clearEvents = async (): Promise<void> => {
-    await db.events.clear();
+    await db.billEvents.clear();
+    await db.vendorEvents.clear();
+    await db.accountEvents.clear();
   };
 
   /**
    * Get event count
    */
   const getEventCount = async (): Promise<number> => {
-    return await db.events.count();
+    const billCount = await db.billEvents.count();
+    const vendorCount = await db.vendorEvents.count();
+    const accountCount = await db.accountEvents.count();
+    return billCount + vendorCount + accountCount;
   };
 
   /**

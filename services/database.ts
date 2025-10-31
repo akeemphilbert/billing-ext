@@ -47,8 +47,10 @@ export interface AccountProjection {
 
 // Define the database schema
 export class BillingDatabase extends Dexie {
-  // Event store (unified for all entities)
-  events!: Table<DomainEvent>;
+  // Event stores (separate tables per aggregate type)
+  billEvents!: Table<DomainEvent>;
+  vendorEvents!: Table<DomainEvent>;
+  accountEvents!: Table<DomainEvent>;
   
   // Projection stores
   billProjections!: Table<BillProjection>;
@@ -122,6 +124,80 @@ export class BillingDatabase extends Dexie {
       
       if (allEvents.length > 0) {
         await trans.table('events').bulkAdd(allEvents);
+      }
+    });
+
+    // Version 5: Use UUID for event IDs instead of auto-increment (unified table)
+    this.version(5).stores({
+      events: 'id, aggregateId, type, sequenceNo, timestamp',
+      billProjections: 'id, billNo, supplier, account, created_at',
+      vendorProjections: 'id, name, created_at',
+      accountProjections: 'id, code, name, created_at',
+    }).upgrade(async (trans) => {
+      // Migrate existing events to add UUID IDs
+      const oldEvents = await trans.table('events').toArray();
+      if (oldEvents.length > 0) {
+        // Import uuid dynamically for migration
+        const { v4: uuidv4 } = await import('uuid');
+        
+        // Delete old events and re-add with UUIDs
+        await trans.table('events').clear();
+        
+        const eventsWithIds = oldEvents.map((event: any) => {
+          // Create new event object with UUID id
+          // Preserve all other fields but replace id with UUID
+          const { id: _oldId, ...eventWithoutId } = event;
+          return {
+            ...eventWithoutId,
+            id: uuidv4(),
+          };
+        });
+        
+        await trans.table('events').bulkAdd(eventsWithIds);
+      }
+    });
+
+    // Version 6: Roll back to separate event tables with UUID IDs
+    this.version(6).stores({
+      billEvents: 'id, aggregateId, type, sequenceNo, timestamp',
+      vendorEvents: 'id, aggregateId, type, sequenceNo, timestamp',
+      accountEvents: 'id, aggregateId, type, sequenceNo, timestamp',
+      billProjections: 'id, billNo, supplier, account, created_at',
+      vendorProjections: 'id, name, created_at',
+      accountProjections: 'id, code, name, created_at',
+    }).upgrade(async (trans) => {
+      // Migrate events from unified table back to separate tables
+      try {
+        const unifiedEvents = await trans.table('events').toArray();
+        if (unifiedEvents.length > 0) {
+          const billEvents: DomainEvent[] = [];
+          const vendorEvents: DomainEvent[] = [];
+          const accountEvents: DomainEvent[] = [];
+          
+          for (const event of unifiedEvents) {
+            if (event.type.startsWith('bill.')) {
+              billEvents.push(event);
+            } else if (event.type.startsWith('vendor.')) {
+              vendorEvents.push(event);
+            } else if (event.type.startsWith('account.')) {
+              accountEvents.push(event);
+            }
+          }
+          
+          // Add events to appropriate tables
+          if (billEvents.length > 0) {
+            await trans.table('billEvents').bulkAdd(billEvents);
+          }
+          if (vendorEvents.length > 0) {
+            await trans.table('vendorEvents').bulkAdd(vendorEvents);
+          }
+          if (accountEvents.length > 0) {
+            await trans.table('accountEvents').bulkAdd(accountEvents);
+          }
+        }
+      } catch (e) {
+        // Unified table might not exist, that's okay
+        console.log('No unified events table to migrate from');
       }
     });
   }
@@ -293,7 +369,7 @@ export class BillingDatabase extends Dexie {
       // Get all bills and filter out deleted ones in memory
       // This avoids needing an index on 'deleted' and is simpler
       const allBills = await this.billProjections.toArray();
-      const activeBills = allBills.filter(bill => !bill.deleted || bill.deleted === false);
+      const activeBills = allBills.filter(bill => !bill.deleted);
       console.log('Database getAllBills: found', activeBills.length, 'active bills out of', allBills.length, 'total');
       return activeBills;
     } catch (error) {
@@ -426,7 +502,7 @@ export class BillingDatabase extends Dexie {
       }
       
       const allVendors = await this.vendorProjections.toArray();
-      const activeVendors = allVendors.filter(vendor => !vendor.deleted || vendor.deleted === false);
+      const activeVendors = allVendors.filter(vendor => !vendor.deleted);
       console.log('Database getAllVendors: found', activeVendors.length, 'active vendors out of', allVendors.length, 'total');
       return activeVendors;
     } catch (error) {
@@ -576,7 +652,7 @@ export class BillingDatabase extends Dexie {
       }
       
       const allAccounts = await this.accountProjections.toArray();
-      const activeAccounts = allAccounts.filter(account => !account.deleted || account.deleted === false);
+      const activeAccounts = allAccounts.filter(account => !account.deleted);
       console.log('Database getAllAccounts: found', activeAccounts.length, 'active accounts out of', allAccounts.length, 'total');
       return activeAccounts;
     } catch (error) {
@@ -621,7 +697,11 @@ export class BillingDatabase extends Dexie {
    */
   async clearAllData(): Promise<void> {
     console.log('Clearing all database data...');
-    await this.events.clear();
+    await Promise.all([
+      this.billEvents.clear(),
+      this.vendorEvents.clear(),
+      this.accountEvents.clear(),
+    ]);
     await this.billProjections.clear();
     await this.vendorProjections.clear();
     await this.accountProjections.clear();
