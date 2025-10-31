@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Create zip
+        run: npm run zip
+
+      - name: Find zip file
+        id: find-zip
+        run: |
+          if [ -f ".output/billing-extension.zip" ]; then
+            ZIP_FILE=".output/billing-extension.zip"
+          else
+            ZIP_FILE=$(find .output -name "*.zip" -type f | head -n 1)
+          fi
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Error: Zip file not found in .output directory"
+            ls -la .output/ || echo "Output directory does not exist"
+            exit 1
+          fi
+          echo "zip_file=$ZIP_FILE" >> $GITHUB_OUTPUT
+          echo "Found zip file: $ZIP_FILE"
+
+      - name: Extract tag name
+        id: tag
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.find-zip.outputs.zip_file }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

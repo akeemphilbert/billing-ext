@@ -1,0 +1,55 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Create zip
+        run: npm run zip
+
+      - name: Find zip file
+        id: find-zip
+        run: |
+          if [ -f ".output/billing-extension.zip" ]; then
+            ZIP_FILE=".output/billing-extension.zip"
+          else
+            ZIP_FILE=$(find .output -name "*.zip" -type f | head -n 1)
+          fi
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Error: Zip file not found in .output directory"
+            ls -la .output/ || echo "Output directory does not exist"
+            exit 1
+          fi
+          echo "zip_file=$ZIP_FILE" >> $GITHUB_OUTPUT
+          echo "Found zip file: $ZIP_FILE"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: billing-ext-build-${{ github.sha }}
+          path: ${{ steps.find-zip.outputs.zip_file }}
+          retention-days: 7
+
